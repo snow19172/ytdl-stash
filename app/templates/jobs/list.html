@@ -28,7 +28,7 @@
     </thead>
     <tbody id="job-list"
            hx-get="/jobs/status"
-           hx-trigger="every 3s"
+           hx-trigger="every 3s [!document.getElementById('job-list').matches(':focus-within')]"
            hx-swap="innerHTML">
       {% include "jobs/_job_rows.html" %}
     </tbody>

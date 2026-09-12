@@ -17,6 +17,8 @@
       <tr>{% call th_tooltip("API key for authenticating with Stash") %}Stash API Key{% endcall %}<td>{{ '***' if settings.stash_api_key else '(empty)' }}</td></tr>
       <tr>{% call th_tooltip("Where yt-dlp saves downloaded files") %}Download directory{% endcall %}<td class="break-all">{{ settings.download_dir }}</td></tr>
       <tr>{% call th_tooltip("How Stash sees the download path (for Docker volume mapping)") %}Stash download dir (path mapping){% endcall %}<td class="break-all">{{ settings.stash_download_dir or '—' }}</td></tr>
+      <tr>{% call th_tooltip("Keeps a sentinel file in the download directory so an external renamer's empty-folder cleanup can't delete it") %}Download dir keep file{% endcall %}<td>{{ 'Enabled' if settings.download_dir_keep_file else 'Disabled' }}</td></tr>
+      <tr>{% call th_tooltip("Name of the sentinel file written into the download directory") %}Keep file name{% endcall %}<td class="break-all">{{ settings.download_dir_keep_file_name if settings.download_dir_keep_file else '—' }}</td></tr>
       <tr>{% call th_tooltip("Where the SQLite database and logs are stored") %}Data directory{% endcall %}<td class="break-all">{{ settings.data_dir }}</td></tr>
       <tr>{% call th_tooltip("Default hours between channel scans") %}Default check interval (hours){% endcall %}<td>{{ settings.default_check_interval_hours }}</td></tr>
       <tr>{% call th_tooltip("How many videos download simultaneously") %}Max concurrent downloads{% endcall %}<td>{{ settings.max_concurrent_downloads }}</td></tr>

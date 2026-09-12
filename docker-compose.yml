@@ -16,6 +16,11 @@ services:
       YTDL_STASH_API_KEY: ${STASH_API_KEY:-}
       YTDL_DOWNLOAD_DIR: /downloads
       # YTDL_STASH_DOWNLOAD_DIR: /data/downloads  # Path to downloads as Stash sees it
+      # A sentinel file keeps the download dir non-empty, so a renamer's
+      # empty-folder cleanup can't delete it — deleting it leaves this
+      # container's bind mount stale until restart. Default: on, ".keep".
+      # YTDL_DOWNLOAD_DIR_KEEP_FILE: "false"
+      # YTDL_DOWNLOAD_DIR_KEEP_FILE_NAME: .keep
       # A Stash renamer plugin moves/renames files on import: wait for the move
       # to land and verify generate, so a busy Stash job queue can't leave
       # scenes without covers/sprites/previews. (Quoted so YAML keeps the string.)

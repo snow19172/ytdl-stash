@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import re
+import stat
 import struct
 from datetime import date
 from typing import Any
@@ -23,6 +24,69 @@ logger = logging.getLogger(__name__)
 # All yt-dlp usage funnels through this module, so this is the one chokepoint
 # that guarantees the patches are live for web, scheduler, and script paths.
 ytdlp_patches.apply_patches()
+
+
+def _keep_file_name(settings: Settings) -> str | None:
+    """Validated sentinel filename, or None when disabled or malformed."""
+    if not settings.download_dir_keep_file:
+        return None
+    name = (settings.download_dir_keep_file_name or "").strip()
+    # Only a plain filename: never let the sentinel escape the download dir.
+    if not name or name in (".", "..") or os.path.basename(name) != name:
+        logger.warning(
+            "Ignoring invalid download_dir_keep_file_name %r (expected a plain filename)",
+            settings.download_dir_keep_file_name,
+        )
+        return None
+    return name
+
+
+def write_keep_file(settings: Settings, directory: str) -> None:
+    """Create the sentinel keep file in ``directory`` if enabled and missing."""
+    name = _keep_file_name(settings)
+    if name is None:
+        return
+    path = os.path.join(directory, name)
+    if os.path.exists(path):
+        return
+    try:
+        with open(path, "x"):
+            pass
+        logger.info("Created download directory keep file: %s", path)
+    except FileExistsError:
+        pass
+    except OSError as e:
+        logger.warning("Could not create keep file %s: %s", path, e)
+
+
+def ensure_download_dir(settings: Settings) -> None:
+    """Create the download directory and its keep file. Called at startup."""
+    os.makedirs(settings.download_dir, exist_ok=True)
+    write_keep_file(settings, settings.download_dir)
+
+
+def assert_download_dir_usable(output_dir: str) -> None:
+    """Fail with an accurate message when the download directory is unusable.
+
+    ``os.makedirs(..., exist_ok=True)`` re-raises FileExistsError whenever
+    ``os.path.isdir()`` is False — and that is False when ``stat()`` itself
+    fails, not just when the path is a non-directory. yt-dlp surfaces the
+    result as a bare "[Errno 17] File exists", which points at the wrong
+    problem entirely, so check the directory ourselves first.
+    """
+    try:
+        st = os.stat(output_dir)
+    except OSError as e:
+        raise RuntimeError(
+            f"Download directory {output_dir!r} is not accessible ({e.strerror}). "
+            "If it was deleted after being emptied, this container's bind mount "
+            "is now stale — recreate the directory on the host and restart the "
+            "container."
+        ) from e
+    if not stat.S_ISDIR(st.st_mode):
+        raise RuntimeError(
+            f"Download directory {output_dir!r} exists but is not a directory."
+        )
 
 
 class DownloadCancelled(Exception):
@@ -596,6 +660,8 @@ def download_video(
     progress_hook: Callable[[dict], None] | None = None,
 ) -> dict:
     """Download a single video and return filepath plus metadata dict."""
+    assert_download_dir_usable(output_dir)
+    write_keep_file(settings, output_dir)
     outtmpl = f"{output_dir}/{output_template}"
     opts = _build_download_opts(settings, outtmpl=outtmpl, progress_hook=progress_hook)
 

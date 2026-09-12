@@ -13,6 +13,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from app.auth import get_cookie_name, get_password_hash, verify_session_token
 from app.config import get_settings
 from app.database import init_db
+from app.downloader import ensure_download_dir
 from app.logging_config import setup_logging
 from app.scheduler import start_scheduler, stop_scheduler
 
@@ -63,7 +64,7 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     setup_logging(log_level=settings.log_level, data_dir=settings.data_dir)
     Path(settings.data_dir).mkdir(parents=True, exist_ok=True)
-    Path(settings.download_dir).mkdir(parents=True, exist_ok=True)
+    ensure_download_dir(settings)
     await init_db(settings)
     from app.download_control import load_pause_state_from_db
     await load_pause_state_from_db()

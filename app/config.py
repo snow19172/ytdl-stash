@@ -11,6 +11,11 @@ class Settings(BaseSettings):
     stash_api_key: str = ""
     download_dir: str = "/downloads"
     stash_download_dir: str | None = None  # Path to downloads as Stash sees it; None = use download_dir
+    # A renamer that moves every file out leaves download_dir empty, and an
+    # empty-directory cleanup then deletes it — which leaves this container's
+    # bind mount dangling until restart. A sentinel file keeps it non-empty.
+    download_dir_keep_file: bool = True
+    download_dir_keep_file_name: str = ".keep"
     data_dir: str = "/app/data"
     default_check_interval_hours: int = 6
     max_concurrent_downloads: int = Field(
