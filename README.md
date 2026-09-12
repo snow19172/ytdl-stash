@@ -78,6 +78,7 @@ These are set on the **host** and interpolated by Docker Compose before the cont
 |----------|------|---------|----------|-------------|
 | `YTDL_STASH_URL` | `str` | `http://localhost:9999` | Optional | Stash server URL |
 | `YTDL_STASH_API_KEY` | `str` | `""` | Optional | Stash API key (if auth is enabled) |
+| `YTDL_STASH_REQUEST_TIMEOUT_SECONDS` | `float` | `120.0` | Optional | Per-request Stash GraphQL timeout (5–600). Raise if a busy Stash queue causes "Stash request timed out" mid-import. The connect phase still fails fast (≤10s), so only slow _responses_ get the longer budget |
 | `YTDL_LOG_LEVEL` | `str` | `INFO` | Optional | `DEBUG`, `INFO`, `WARNING`, or `ERROR` |
 
 ### Paths
@@ -86,6 +87,8 @@ These are set on the **host** and interpolated by Docker Compose before the cont
 |----------|------|---------|----------|-------------|
 | `YTDL_DOWNLOAD_DIR` | `str` | `/downloads` | Optional | Where videos are saved (inside container) |
 | `YTDL_STASH_DOWNLOAD_DIR` | `str \| None` | `None` | Optional | Path to downloads **as Stash sees it** (see [Folder mapping](#folder-mapping-stash-path)) |
+| `YTDL_DOWNLOAD_DIR_KEEP_FILE` | `bool` | `true` | Optional | Keep a sentinel file in the download directory so it is never empty (see [Download directory keep file](#download-directory-keep-file)) |
+| `YTDL_DOWNLOAD_DIR_KEEP_FILE_NAME` | `str` | `.keep` | Optional | Name of that sentinel file. Must be a plain filename — a value containing path separators is rejected and logged |
 | `YTDL_DATA_DIR` | `str` | `/app/data` | Optional | Where the SQLite database is stored |
 | `YTDL_COOKIES_FILE` | `str \| None` | `None` | Optional | Path to a cookies file (e.g. `/app/cookies.txt`) |
 
@@ -96,6 +99,9 @@ These are set on the **host** and interpolated by Docker Compose before the cont
 | `YTDL_DEFAULT_CHECK_INTERVAL_HOURS` | `int` | `6` | Optional | Hours between automatic channel checks |
 | `YTDL_MAX_CONCURRENT_DOWNLOADS` | `int` | `1` | Optional | Parallel download/import slots (min 1, max 16) |
 | `YTDL_DOWNLOAD_DELAY_SECONDS` | `int` | `5` | Optional | Seconds to wait between successive downloads |
+| `YTDL_DOWNLOAD_TIMEOUT_SECONDS` | `int` | `0` | Optional | Max seconds for a single download before it is aborted. `0` = no timeout |
+| `YTDL_CHANNEL_CHECK_INTERVAL_SECONDS` | `int` | `60` | Optional | How often the scheduler looks for channels that are **due** a scan (10–86400). This is the tick rate; how often each channel is actually scanned is set by `YTDL_DEFAULT_CHECK_INTERVAL_HOURS` (or per-channel in the UI) |
+| `YTDL_DOWNLOAD_PROCESS_INTERVAL_SECONDS` | `int` | `30` | Optional | How often the download processor picks up the next pending video (10–86400) |
 | `YTDL_YTDLP_UPDATE_CHECK_INTERVAL_HOURS` | `int` | `24` | Optional | Hours between PyPI checks for a newer yt-dlp |
 | `YTDL_RETRY_FAILED_INTERVAL_HOURS` | `int` | `0` | Optional | **Initial default** for the scheduled "Retry All Failed" interval, in hours (`0` = off). You normally set this from the **Jobs page** (the interval box on that row, `0` = off) — that value is persisted to the DB and survives restarts, overriding this env var. Retry destroys any linked Stash scene + file and re-downloads. |
 
@@ -139,6 +145,17 @@ These control what happens **after** a scene is synced to Stash.
 | `YTDL_STASH_EXPECT_RENAMER_ON_IMPORT` | `bool` | `false` | Optional | Set **`true`** if a renamer plugin moves/renames files on import. The import settle then *waits for the path to actually change* (instead of accepting the pre-move path) and generate re-checks the file didn't move mid-job — fixes silent/empty generation when a **busy Stash job queue** delays the renamer. Leave `false` if no renamer runs on import (default behavior is unchanged). |
 | `YTDL_STASH_IMPORT_SETTLE_TIMEOUT_SECONDS` | `int` | `600` | Optional | Max wall-clock seconds (0–3600) to wait for the renamer's move to land when `YTDL_STASH_EXPECT_RENAMER_ON_IMPORT=true`. Generous so a backed-up Stash queue doesn't cause a premature, stale path; the wait returns as soon as the path is stable, so this only matters when the move is slow. |
 
+### Stash job-queue coordination
+
+Stash runs scans and generates as asynchronous jobs on a **single FIFO queue**. These control how long ytdl-stash waits on that queue, and whether it backs off while the queue is busy.
+
+| Variable | Type | Default | Required | Description |
+|----------|------|---------|----------|-------------|
+| `YTDL_STASH_JOB_QUEUE_TIMEOUT_SECONDS` | `int` | `1800` | Optional | Max seconds a scan/generate job may sit **queued** before ytdl-stash stops waiting (30–14400) |
+| `YTDL_STASH_JOB_STALL_TIMEOUT_SECONDS` | `int` | `900` | Optional | Once **running**, a job is abandoned only after it makes no observable progress (neither percentage nor sub-task changes) for this long (30–14400). Not a flat time cap, so a legitimately long generate is never cut off mid-run |
+| `YTDL_STASH_MAX_QUEUE_DEPTH` | `int` | `0` | Optional | Backpressure: wait until Stash's queue holds at most this many jobs before triggering a scan/generate (0–100, `0` = disabled). Stash counts a bulk task as **one** job, so keep this small (e.g. `2`) |
+| `YTDL_STASH_QUEUE_WAIT_TIMEOUT_SECONDS` | `int` | `300` | Optional | Max seconds to wait on that backpressure before proceeding anyway (0–3600), so a perpetually busy Stash can't stall imports forever |
+
 ### Folder mapping (Stash path)
 
 If ytdl-stash and Stash use the **same** path for downloads (e.g. both have the volume at `/downloads`), leave `YTDL_STASH_DOWNLOAD_DIR` unset.
@@ -150,6 +167,22 @@ YTDL_STASH_DOWNLOAD_DIR: /data/downloads
 ```
 
 The app will translate file paths when telling Stash to scan, so Stash can find the files.
+
+### Download directory keep file
+
+Some Stash renamer plugins move every downloaded file out of the download directory on import. If an empty-folder cleanup then removes the now-empty directory, the container's bind mount is left dangling: `stat()` on the path fails and **every** download fails afterwards until the container is restarted.
+
+To prevent that, ytdl-stash keeps a sentinel file (default `.keep`) in the download directory so it is never empty. It is written at startup and re-checked before each download, so it returns on its own if something removes it. The file is hidden and is not a media file, so Stash ignores it.
+
+To disable it:
+
+```yaml
+YTDL_DOWNLOAD_DIR_KEEP_FILE: "false"
+```
+
+Quote the value — unquoted `false` is a YAML boolean, and Compose expects strings for environment values.
+
+If the directory has **already** been deleted, the keep file cannot repair a mount that is already stale: recreate the directory on the host and restart the container.
 
 ## Health check
 
